@@ -1,19 +1,49 @@
 <script lang="ts">
   import { onDestroy, onMount } from 'svelte';
   import { Button, Checkbox, Input, Modal } from 'flowbite-svelte';
-  import { CalendarDays, ChevronDown, Download, Eye, GripVertical, Plus, Trash2 } from 'lucide-svelte';
+  import {
+    CalendarDays,
+    Download,
+    Eye,
+    Globe,
+    GripVertical,
+    Plus,
+    Replace,
+    Trash2,
+    Upload,
+    UserRound,
+    UsersRound
+  } from 'lucide-svelte';
 
   type WeekStartsOn = 'monday' | 'sunday';
   type ItemColor = 'black' | 'red' | 'blue';
+  type ScheduleScope = 'personal' | 'group' | 'world';
   type TeleworkStatus = { papa: boolean; mama: boolean };
-  type ScheduleItem = { id: string; date: string; text: string; color: ItemColor };
+  type UserInfo = {
+    authenticated: boolean;
+    user?: string;
+    email?: string;
+    groups: string[];
+  };
+  type ScheduleItem = {
+    id: string;
+    sourceId?: string;
+    date: string;
+    text: string;
+    color: ItemColor;
+    scopeType?: ScheduleScope;
+    group?: string;
+  };
   type MultiDayScheduleItem = {
     id: string;
+    sourceId?: string;
     startDate: string;
     endDate: string;
     text: string;
     color: ItemColor;
     arrow: boolean;
+    scopeType?: ScheduleScope;
+    group?: string;
   };
   type CalendarData = {
     year: number;
@@ -64,6 +94,10 @@
   const colorLabels: Record<ItemColor, string> = { black: '黒', red: '赤', blue: '青' };
 
   let data: CalendarData = defaultData();
+  let userInfo: UserInfo = { authenticated: false, groups: [] };
+  let showPersonalSchedules = true;
+  let showGroupSchedules = true;
+  let showWorldSchedules = true;
   let ready = false;
   let loadBusy = false;
   let saveTimer: ReturnType<typeof setTimeout> | undefined;
@@ -76,11 +110,15 @@
   let selectedMultiDayId = '';
   let newScheduleText = '';
   let newScheduleColor: ItemColor = 'black';
+  let newScheduleScopeType: ScheduleScope = 'personal';
+  let newScheduleGroup = '';
   let newMultiDay: MultiDayScheduleItem = blankMultiDay();
+  let newMultiDayScopeType: ScheduleScope = 'personal';
+  let newMultiDayGroup = '';
   let dayModalMessage = '';
-  let dataMenuOpen = false;
   let replaceOnImport = false;
   let importBusy = false;
+  let importFileInput: HTMLInputElement | null = null;
   let importResultOpen = false;
   let importResultTitle = '';
   let importResultMessage = '';
@@ -90,12 +128,30 @@
   let draggingScheduleId = '';
   let dragOverScheduleId = '';
 
+  $: availableGroups = userInfo.groups ?? [];
+  $: supportsGroupSchedules = availableGroups.length > 0;
+  $: canEditWorldSchedules = true;
+  $: canChoosePersonalSchedules = userInfo.authenticated;
+  $: showScopeSelector = canChoosePersonalSchedules || supportsGroupSchedules;
+  $: scheduleVisibilityKey = `${showPersonalSchedules}-${showGroupSchedules}-${showWorldSchedules}`;
+  $: scopeVisibility = {
+    personal: showPersonalSchedules,
+    group: showGroupSchedules,
+    world: showWorldSchedules
+  };
   $: grid = buildGrid(data.year, data.month, data.weekStartsOn);
   $: weekdayOrder = data.weekStartsOn === 'sunday' ? [0, 1, 2, 3, 4, 5, 6] : [1, 2, 3, 4, 5, 6, 0];
   $: selectedTelework = data.telework[selectedDayKey] ?? { papa: false, mama: false };
-  $: selectedItems = data.scheduleItems.filter((item) => item.date === selectedDayKey);
-  $: selectedMultiDayItem = data.multiDayItems.find((item) => item.id === selectedMultiDayId);
-  $: multiDaySegments = buildMultiDaySegments(data.multiDayItems, grid);
+  $: visibleScheduleItems = scheduleVisibilityKey
+    ? data.scheduleItems.filter((item) => isScheduleItemVisible(item))
+    : data.scheduleItems.filter((item) => isScheduleItemVisible(item));
+  $: visibleScheduleItemsByDate = groupScheduleItemsByDate(visibleScheduleItems);
+  $: visibleMultiDayItems = scheduleVisibilityKey
+    ? data.multiDayItems.filter((item) => isMultiDayItemVisible(item))
+    : data.multiDayItems.filter((item) => isMultiDayItemVisible(item));
+  $: selectedItems = visibleScheduleItems.filter((item) => item.date === selectedDayKey);
+  $: selectedMultiDayItem = visibleMultiDayItems.find((item) => item.id === selectedMultiDayId);
+  $: multiDaySegments = buildMultiDaySegments(visibleMultiDayItems, grid);
   $: multiDaySegmentsByRow = groupSegmentsByRow(multiDaySegments, grid.length);
   $: pdfBusy = downloadBusy || previewBusy;
   $: if (ready && data.year !== loadedHolidayYear) {
@@ -104,8 +160,7 @@
 
   onMount(() => {
     localStorage.removeItem(legacyStorageKey);
-    const initial = defaultData();
-    void loadCalendar(initial.year, initial.month, true);
+    void initializeApp();
   });
 
   onDestroy(() => {
@@ -114,6 +169,31 @@
 
   function apiPath(path: string): string {
     return `api/${path.replace(/^\/+/, '')}`;
+  }
+
+  async function initializeApp() {
+    const initial = defaultData();
+    await loadMe();
+    await loadCalendar(initial.year, initial.month, true);
+  }
+
+  async function loadMe() {
+    try {
+      const response = await fetch(apiPath('me'));
+      if (!response.ok) throw new Error(await response.text());
+      const payload = (await response.json()) as Partial<UserInfo>;
+      userInfo = {
+        authenticated: payload.authenticated === true,
+        user: payload.user,
+        email: payload.email,
+        groups: Array.isArray(payload.groups)
+          ? Array.from(new Set(payload.groups.map((group) => String(group).trim()).filter(Boolean)))
+          : []
+      };
+    } catch {
+      userInfo = { authenticated: false, groups: [] };
+    }
+    resetNewItemScopeDefaults();
   }
 
   function defaultData(): CalendarData {
@@ -137,9 +217,110 @@
       month: Math.min(12, Math.max(1, Number.isFinite(month) ? month : current.month)),
       weekStartsOn: value.weekStartsOn === 'sunday' ? 'sunday' : 'monday',
       telework: value.telework ?? {},
-      scheduleItems: Array.isArray(value.scheduleItems) ? value.scheduleItems : [],
-      multiDayItems: Array.isArray(value.multiDayItems) ? value.multiDayItems : []
+      scheduleItems: Array.isArray(value.scheduleItems) ? value.scheduleItems.map(normalizeScheduleItem) : [],
+      multiDayItems: Array.isArray(value.multiDayItems) ? value.multiDayItems.map(normalizeMultiDayItem) : []
     };
+  }
+
+  function normalizeScheduleItem(value: Partial<ScheduleItem>): ScheduleItem {
+    const scopeType = normalizeScopeType(value.scopeType, value.group);
+    return {
+      id: String(value.id ?? createId()),
+      sourceId: sanitizeOptionalString(value.sourceId),
+      date: normalizeDateKey(value.date ?? '') || selectedDayKey || `${data.year}-${pad(data.month)}-01`,
+      text: String(value.text ?? ''),
+      color: coerceColor(String(value.color ?? 'black')),
+      scopeType,
+      group: scopeType === 'group' ? resolveGroupName(value.group) : ''
+    };
+  }
+
+  function normalizeMultiDayItem(value: Partial<MultiDayScheduleItem>): MultiDayScheduleItem {
+    const startDate = normalizeDateKey(value.startDate ?? '') || `${data.year}-${pad(data.month)}-01`;
+    const endDate = normalizeDateKey(value.endDate ?? '') || startDate;
+    const scopeType = normalizeScopeType(value.scopeType, value.group);
+    return {
+      id: String(value.id ?? createId()),
+      sourceId: sanitizeOptionalString(value.sourceId),
+      startDate,
+      endDate: endDate < startDate ? startDate : endDate,
+      text: String(value.text ?? ''),
+      color: coerceColor(String(value.color ?? 'black')),
+      arrow: value.arrow !== false,
+      scopeType,
+      group: scopeType === 'group' ? resolveGroupName(value.group) : ''
+    };
+  }
+
+  function normalizeScopeType(value: unknown, group: unknown): ScheduleScope {
+    if (value === 'group' && supportsGroupSchedules) {
+      return resolveGroupName(group) ? 'group' : defaultEditableScope();
+    }
+    if (value === 'world') return 'world';
+    if (value === 'personal') return 'personal';
+    if (supportsGroupSchedules && resolveGroupName(group)) return 'group';
+    return defaultEditableScope();
+  }
+
+  function defaultEditableScope(): ScheduleScope {
+    return userInfo.authenticated ? 'personal' : 'world';
+  }
+
+  function scopeToggleOptions(): Array<{ value: ScheduleScope; label: string }> {
+    const options: Array<{ value: ScheduleScope; label: string }> = [];
+    if (canChoosePersonalSchedules) {
+      options.push({ value: 'personal', label: '個人予定' });
+    }
+    if (supportsGroupSchedules) {
+      options.push({ value: 'group', label: 'グループ予定' });
+    }
+    if (canEditWorldSchedules) {
+      options.push({ value: 'world', label: '共通予定' });
+    }
+    return options;
+  }
+
+  function scopeOptionLabel(scopeType: ScheduleScope): string {
+    if (scopeType === 'group') return 'グループ予定';
+    if (scopeType === 'world') return '共通予定';
+    return '個人予定';
+  }
+
+  function isScopeVisible(scopeType: ScheduleScope): boolean {
+    if (scopeType === 'group') return showGroupSchedules;
+    if (scopeType === 'world') return showWorldSchedules;
+    return showPersonalSchedules;
+  }
+
+  function toggleScopeVisibility(scopeType: ScheduleScope) {
+    if (scopeType === 'group') {
+      showGroupSchedules = !showGroupSchedules;
+      return;
+    }
+    if (scopeType === 'world') {
+      showWorldSchedules = !showWorldSchedules;
+      return;
+    }
+    showPersonalSchedules = !showPersonalSchedules;
+  }
+
+  function sanitizeOptionalString(value: unknown): string | undefined {
+    const normalized = String(value ?? '').trim();
+    return normalized ? normalized : undefined;
+  }
+
+  function resolveGroupName(value: unknown): string {
+    const group = String(value ?? '').trim();
+    if (!group) return availableGroups[0] ?? '';
+    if (availableGroups.length === 0) return '';
+    return availableGroups.includes(group) ? group : availableGroups[0] ?? '';
+  }
+
+  function resetNewItemScopeDefaults() {
+    newScheduleScopeType = defaultEditableScope();
+    newScheduleGroup = resolveGroupName(newScheduleGroup);
+    newMultiDayScopeType = defaultEditableScope();
+    newMultiDayGroup = resolveGroupName(newMultiDayGroup);
   }
 
   function mergeById<T extends { id: string }>(base: T[], incoming: T[]): T[] {
@@ -272,7 +453,11 @@
     dayEditorMode = 'schedule';
     newScheduleText = '';
     newScheduleColor = 'black';
+    newScheduleScopeType = defaultEditableScope();
+    newScheduleGroup = availableGroups[0] ?? '';
     newMultiDay = blankMultiDayForDate(selectedDayKey);
+    newMultiDayScopeType = defaultEditableScope();
+    newMultiDayGroup = availableGroups[0] ?? '';
     dayModalMessage = '';
     dayModalOpen = true;
   }
@@ -306,17 +491,40 @@
   function addSchedule() {
     const text = newScheduleText.trim();
     if (!text) return;
+    const scopeType = normalizeEditableScope(newScheduleScopeType);
     commitData({
       ...data,
-      scheduleItems: [...data.scheduleItems, { id: createId(), date: selectedDayKey, text, color: newScheduleColor }]
+      scheduleItems: [
+        ...data.scheduleItems,
+        {
+          id: createId(),
+          date: selectedDayKey,
+          text,
+          color: newScheduleColor,
+          scopeType,
+          group: scopeType === 'group' ? resolveGroupName(newScheduleGroup) : ''
+        }
+      ]
     });
     newScheduleText = '';
+  }
+
+  function normalizeEditableScope(scopeType: ScheduleScope): ScheduleScope {
+    if (scopeType === 'group') {
+      return supportsGroupSchedules && resolveGroupName(newScheduleGroup) ? 'group' : defaultEditableScope();
+    }
+    if (scopeType === 'world') return 'world';
+    return scopeType === 'personal' ? 'personal' : defaultEditableScope();
   }
 
   function updateSchedule(id: string, patch: Partial<ScheduleItem>) {
     commitData({
       ...data,
-      scheduleItems: data.scheduleItems.map((item) => (item.id === id ? { ...item, ...patch } : item))
+      scheduleItems: data.scheduleItems.map((item) => {
+        if (item.id !== id) return item;
+        const merged = normalizeScheduleItem({ ...item, ...patch });
+        return merged;
+      })
     });
   }
 
@@ -326,7 +534,7 @@
 
   function reorderSelectedSchedule(sourceId: string, targetId: string) {
     if (sourceId === targetId) return;
-    const dayItems = data.scheduleItems.filter((item) => item.date === selectedDayKey);
+    const dayItems = data.scheduleItems.filter((item) => item.date === selectedDayKey && isScheduleItemVisible(item));
     const sourceIndex = dayItems.findIndex((item) => item.id === sourceId);
     const targetIndex = dayItems.findIndex((item) => item.id === targetId);
     if (sourceIndex < 0 || targetIndex < 0) return;
@@ -337,12 +545,16 @@
     let nextDayItemIndex = 0;
     commitData({
       ...data,
-      scheduleItems: data.scheduleItems.map((item) => (item.date === selectedDayKey ? reordered[nextDayItemIndex++] : item))
+      scheduleItems: data.scheduleItems.map((item) => {
+        if (item.date !== selectedDayKey || !isScheduleItemVisible(item)) return item;
+        return reordered[nextDayItemIndex++];
+      })
     });
   }
 
   function startScheduleDrag(event: PointerEvent, id: string) {
-    if (selectedItems.length < 2) return;
+    const item = selectedItems.find((candidate) => candidate.id === id);
+    if (!item || isReadOnlyItem(item) || selectedItems.filter((candidate) => !isReadOnlyItem(candidate)).length < 2) return;
     draggingScheduleId = id;
     dragOverScheduleId = id;
     window.addEventListener('pointermove', handleSchedulePointerMove, { passive: false });
@@ -375,10 +587,13 @@
   }
 
   function handleScheduleHandleKeydown(event: KeyboardEvent, id: string) {
+    const current = selectedItems.find((item) => item.id === id);
+    if (!current || isReadOnlyItem(current)) return;
     if (event.key !== 'ArrowUp' && event.key !== 'ArrowDown') return;
-    const index = selectedItems.findIndex((item) => item.id === id);
+    const editableItems = selectedItems.filter((item) => !isReadOnlyItem(item));
+    const index = editableItems.findIndex((item) => item.id === id);
     const targetIndex = event.key === 'ArrowUp' ? index - 1 : index + 1;
-    const target = selectedItems[targetIndex];
+    const target = editableItems[targetIndex];
     if (!target) return;
     event.preventDefault();
     reorderSelectedSchedule(id, target.id);
@@ -391,10 +606,34 @@
       dayModalMessage = '期間予定の開始日と終了日を確認してください。';
       return;
     }
-    commitData({ ...data, multiDayItems: [...data.multiDayItems, { ...newMultiDay, id: createId(), startDate, endDate }] });
+    const scopeType = normalizeMultiDayScope(newMultiDayScopeType);
+    commitData({
+      ...data,
+      multiDayItems: [
+        ...data.multiDayItems,
+        {
+          ...newMultiDay,
+          id: createId(),
+          startDate,
+          endDate,
+          scopeType,
+          group: scopeType === 'group' ? resolveGroupName(newMultiDayGroup) : ''
+        }
+      ]
+    });
     newMultiDay = blankMultiDayForDate(selectedDayKey);
+    newMultiDayScopeType = defaultEditableScope();
+    newMultiDayGroup = availableGroups[0] ?? '';
     dayModalMessage = '';
     dayEditorMode = 'schedule';
+  }
+
+  function normalizeMultiDayScope(scopeType: ScheduleScope): ScheduleScope {
+    if (scopeType === 'group') {
+      return supportsGroupSchedules && resolveGroupName(newMultiDayGroup) ? 'group' : defaultEditableScope();
+    }
+    if (scopeType === 'world') return 'world';
+    return scopeType === 'personal' ? 'personal' : defaultEditableScope();
   }
 
   function updateMultiDay(id: string, patch: Partial<MultiDayScheduleItem>) {
@@ -404,7 +643,7 @@
       ...data,
       multiDayItems: data.multiDayItems.map((item) => {
         if (item.id !== id) return item;
-        const updated = { ...item, ...patch };
+        const updated = normalizeMultiDayItem({ ...item, ...patch });
         const start = normalizeDateKey(updated.startDate);
         const end = normalizeDateKey(updated.endDate);
         if (start && end && start > end) {
@@ -430,11 +669,37 @@
   }
 
   function scheduleForDate(key: string): ScheduleItem[] {
-    return data.scheduleItems.filter((item) => item.date === key);
+    return visibleScheduleItemsByDate[key] ?? [];
+  }
+
+  function groupScheduleItemsByDate(items: ScheduleItem[]): Record<string, ScheduleItem[]> {
+    const grouped: Record<string, ScheduleItem[]> = {};
+    for (const item of items) {
+      (grouped[item.date] ??= []).push(item);
+    }
+    return grouped;
   }
 
   function teleworkForDate(key: string): TeleworkStatus {
     return data.telework[key] ?? { papa: false, mama: false };
+  }
+
+  function isScheduleItemVisible(item: ScheduleItem): boolean {
+    const scopeType = scopeSelectValue(item.scopeType);
+    if (scopeType === 'group') return showGroupSchedules;
+    if (scopeType === 'world') return showWorldSchedules;
+    return showPersonalSchedules;
+  }
+
+  function isMultiDayItemVisible(item: MultiDayScheduleItem): boolean {
+    const scopeType = scopeSelectValue(item.scopeType);
+    if (scopeType === 'group') return showGroupSchedules;
+    if (scopeType === 'world') return showWorldSchedules;
+    return showPersonalSchedules;
+  }
+
+  function isReadOnlyItem(item: ScheduleItem | MultiDayScheduleItem): boolean {
+    return false;
   }
 
   function buildMultiDaySegments(items: MultiDayScheduleItem[], calendarGrid: Date[][]): Segment[] {
@@ -444,8 +709,8 @@
       `${normalizeDateKey(a.startDate)}-${normalizeDateKey(a.endDate)}`.localeCompare(`${normalizeDateKey(b.startDate)}-${normalizeDateKey(b.endDate)}`)
     );
     for (const item of sorted) {
-      const itemStartDate = normalizeDateKey(item.startDate);
       const itemEndDate = normalizeDateKey(item.endDate);
+      const itemStartDate = normalizeDateKey(item.startDate);
       if (!itemStartDate || !itemEndDate) continue;
       const start = parseKey(item.startDate);
       const end = parseKey(item.endDate);
@@ -519,12 +784,20 @@
     return value === 'red' || value === 'blue' ? value : 'black';
   }
 
+  function buildPdfPayload(): CalendarData {
+    return {
+      ...data,
+      scheduleItems: visibleScheduleItems,
+      multiDayItems: visibleMultiDayItems
+    };
+  }
+
   async function generatePdfBlob(): Promise<Blob> {
     await saveCalendarNow();
     const response = await fetch(apiPath('pdf'), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(data)
+      body: JSON.stringify(buildPdfPayload())
     });
     if (!response.ok) {
       const text = await response.text();
@@ -585,6 +858,10 @@
     URL.revokeObjectURL(url);
   }
 
+  function openImportPicker() {
+    importFileInput?.click();
+  }
+
   async function importJson(event: Event) {
     const input = event.currentTarget as HTMLInputElement;
     const file = input.files?.[0];
@@ -610,7 +887,6 @@
         newMultiDay = blankMultiDayForDate(selectedDayKey);
       }
       await saveCalendarNow();
-      dataMenuOpen = false;
       importResultTitle = '読み込み完了';
       importResultMessage = `${imported.year}年${imported.month}月のデータを${replaceOnImport ? '入れ替え' : '読み込み'}ました。`;
     } catch (error) {
@@ -678,6 +954,26 @@
       throw new Error(await response.text());
     }
   }
+
+  function scopeSelectValue(scopeType: ScheduleScope | undefined): ScheduleScope {
+    return scopeType === 'group' || scopeType === 'world' ? scopeType : 'personal';
+  }
+
+  function handleScheduleGroupChange(id: string, event: Event) {
+    updateSchedule(id, { group: (event.currentTarget as HTMLSelectElement).value });
+  }
+
+  function handleMultiDayGroupChange(id: string, event: Event) {
+    updateMultiDay(id, { group: (event.currentTarget as HTMLSelectElement).value });
+  }
+
+  function setNewScheduleScopeType(scopeType: ScheduleScope) {
+    newScheduleScopeType = scopeType;
+  }
+
+  function setNewMultiDayScopeType(scopeType: ScheduleScope) {
+    newMultiDayScopeType = scopeType;
+  }
 </script>
 
 <main class="app-shell">
@@ -687,6 +983,14 @@
       <div>
         <h1>KazokuCal</h1>
         <p>{data.year}年 {data.month}月 / {monthNames[data.month]}</p>
+        {#if userInfo.authenticated}
+          <p class="auth-meta">
+            {userInfo.user ?? userInfo.email ?? 'authenticated'}
+            {#if availableGroups.length > 0}
+              / groups: {availableGroups.join(', ')}
+            {/if}
+          </p>
+        {/if}
       </div>
     </div>
 
@@ -697,7 +1001,7 @@
       </label>
       <label>
         月
-        <select class="select-like" value={data.month} on:change={(e) => updateMonth(e.currentTarget.value)}>
+        <select class="select-like month-select" value={data.month} on:change={(e) => updateMonth(e.currentTarget.value)}>
           {#each Array.from({ length: 12 }, (_, i) => i + 1) as month}
             <option value={month}>{month}月</option>
           {/each}
@@ -705,34 +1009,85 @@
       </label>
       <label>
         週の始まり
-        <select class="select-like" value={data.weekStartsOn} on:change={(e) => updateWeekStartsOn(e.currentTarget.value)}>
+        <select class="select-like weekstart-select" value={data.weekStartsOn} on:change={(e) => updateWeekStartsOn(e.currentTarget.value)}>
           <option value="monday">月曜日</option>
           <option value="sunday">日曜日</option>
         </select>
       </label>
-      <Button color="light" on:click={previewPdf} disabled={pdfBusy}>
-        <Eye size={16} class="mr-2" />
-        {previewBusy ? '生成中' : 'PDF 表示'}
-      </Button>
-      <Button color="blue" on:click={downloadPdf} disabled={pdfBusy}>
-        <Download size={16} class="mr-2" />
-        {downloadBusy ? '生成中' : 'PDF ダウンロード'}
-      </Button>
-      <div class="toolbar-data">
-        <Button color="light" on:click={() => (dataMenuOpen = !dataMenuOpen)} aria-expanded={dataMenuOpen}>
-          データ
-          <ChevronDown size={16} class={`ml-2 data-chevron ${dataMenuOpen ? 'open' : ''}`} />
-        </Button>
-        {#if dataMenuOpen}
-          <div class="toolbar-data-menu">
-            <Button color="light" on:click={exportJson}>JSON 書き出し</Button>
-            <label class="file-button">
-              JSON 読み込み
-              <input type="file" accept="application/json" on:change={importJson} />
-            </label>
-            <Checkbox bind:checked={replaceOnImport}>既存予定を消して入れ替え</Checkbox>
-          </div>
-        {/if}
+      <div class="control-field">
+        <span>表示</span>
+        <div class="scope-toggle toolbar-scope-toggle" role="group" aria-label="表示する予定の種別">
+          <button type="button" class:active={scopeVisibility.personal} on:click={() => toggleScopeVisibility('personal')} aria-pressed={scopeVisibility.personal} aria-label={`個人予定: ${scopeVisibility.personal ? 'ON' : 'OFF'}`} title={`個人予定: ${scopeVisibility.personal ? 'ON' : 'OFF'}`}>
+            <UserRound size={16} />
+          </button>
+          {#if supportsGroupSchedules}
+            <button type="button" class:active={scopeVisibility.group} on:click={() => toggleScopeVisibility('group')} aria-pressed={scopeVisibility.group} aria-label={`グループ予定: ${scopeVisibility.group ? 'ON' : 'OFF'}`} title={`グループ予定: ${scopeVisibility.group ? 'ON' : 'OFF'}`}>
+              <UsersRound size={16} />
+            </button>
+          {/if}
+          <button type="button" class:active={scopeVisibility.world} on:click={() => toggleScopeVisibility('world')} aria-pressed={scopeVisibility.world} aria-label={`共通予定: ${scopeVisibility.world ? 'ON' : 'OFF'}`} title={`共通予定: ${scopeVisibility.world ? 'ON' : 'OFF'}`}>
+            <Globe size={16} />
+          </button>
+        </div>
+      </div>
+      <div class="control-field">
+        <span>PDF</span>
+        <div class="scope-toggle toolbar-action-toggle" role="group" aria-label="PDF 操作">
+          <button
+            type="button"
+            class:active={previewBusy}
+            on:click={previewPdf}
+            disabled={pdfBusy}
+            aria-label={previewBusy ? 'PDF 表示を生成中' : 'PDF を表示'}
+            title={previewBusy ? 'PDF 表示を生成中' : 'PDF を表示'}
+          >
+            <Eye size={16} />
+          </button>
+          <button
+            type="button"
+            class:active={downloadBusy}
+            on:click={downloadPdf}
+            disabled={pdfBusy}
+            aria-label={downloadBusy ? 'PDF ダウンロードを生成中' : 'PDF をダウンロード'}
+            title={downloadBusy ? 'PDF をダウンロード' : 'PDF をダウンロード'}
+          >
+            <Download size={16} />
+          </button>
+        </div>
+      </div>
+      <div class="control-field">
+        <span>データ</span>
+        <div class="scope-toggle toolbar-action-toggle" role="group" aria-label="データ操作">
+          <button
+            type="button"
+            on:click={exportJson}
+            disabled={importBusy}
+            aria-label="JSON を書き出し"
+            title="JSON を書き出し"
+          >
+            <Download size={16} />
+          </button>
+          <button
+            type="button"
+            on:click={openImportPicker}
+            disabled={importBusy}
+            aria-label="JSON を読み込み"
+            title="JSON を読み込み"
+          >
+            <Upload size={16} />
+          </button>
+          <button
+            type="button"
+            class:active={replaceOnImport}
+            on:click={() => (replaceOnImport = !replaceOnImport)}
+            aria-pressed={replaceOnImport}
+            aria-label={`既存予定を消して入れ替え: ${replaceOnImport ? 'ON' : 'OFF'}`}
+            title={`既存予定を消して入れ替え: ${replaceOnImport ? 'ON' : 'OFF'}`}
+          >
+            <Replace size={16} />
+          </button>
+          <input bind:this={importFileInput} class="toolbar-file-input" type="file" accept="application/json" on:change={importJson} />
+        </div>
       </div>
     </div>
   </section>
@@ -782,7 +1137,7 @@
                 {/if}
               </div>
               <div class="day-items">
-                {#each scheduleForDate(key) as item}
+                {#each visibleScheduleItemsByDate[key] ?? [] as item}
                   <span class={colorClass(item.color)}>{item.text}</span>
                 {/each}
               </div>
@@ -833,33 +1188,59 @@
 
     {#if dayEditorMode === 'schedule'}
       <div class="schedule-add">
-        <Input
-          class="schedule-text-input"
-          style={`color: ${colorHex(newScheduleColor)};`}
-          placeholder="予定を入力"
-          bind:value={newScheduleText}
-          maxlength="120"
-        />
-        <div class="color-palette" role="radiogroup" aria-label="追加する予定の色">
-          {#each colorOptions as color}
-            <button
-              type="button"
-              class={`color-swatch color-swatch-${color}`}
-              class:active={newScheduleColor === color}
-              role="radio"
-              aria-checked={newScheduleColor === color}
-              aria-label={colorLabels[color]}
-              title={colorLabels[color]}
-              on:click={() => (newScheduleColor = color)}
-            >
-              <span></span>
-            </button>
-          {/each}
+        <div class="schedule-add-main">
+          <Input
+            class="schedule-text-input schedule-input-cell"
+            style={`color: ${colorHex(newScheduleColor)};`}
+            placeholder="予定を入力"
+            bind:value={newScheduleText}
+            maxlength="120"
+          />
+          <div class="color-palette schedule-color-cell" role="radiogroup" aria-label="追加する予定の色">
+            {#each colorOptions as color}
+              <button
+                type="button"
+                class={`color-swatch color-swatch-${color}`}
+                class:active={newScheduleColor === color}
+                role="radio"
+                aria-checked={newScheduleColor === color}
+                aria-label={colorLabels[color]}
+                title={colorLabels[color]}
+                on:click={() => (newScheduleColor = color)}
+              >
+                <span></span>
+              </button>
+            {/each}
+          </div>
+          {#if showScopeSelector}
+            <div class="scope-toggle schedule-scope-cell" role="group" aria-label="予定の種別">
+              {#each scopeToggleOptions() as option}
+                <button type="button" class:active={newScheduleScopeType === option.value} on:click={() => setNewScheduleScopeType(option.value)} aria-pressed={newScheduleScopeType === option.value} aria-label={scopeOptionLabel(option.value)} title={scopeOptionLabel(option.value)}>
+                  {#if option.value === 'personal'}
+                    <UserRound size={16} />
+                  {:else if option.value === 'group'}
+                    <UsersRound size={16} />
+                  {:else}
+                    <Globe size={16} />
+                  {/if}
+                </button>
+              {/each}
+            </div>
+          {/if}
+          <Button class="schedule-action-cell" color="dark" on:click={addSchedule}>
+            <Plus size={16} class="mr-2" />
+            追加
+          </Button>
         </div>
-        <Button color="dark" on:click={addSchedule}>
-          <Plus size={16} class="mr-2" />
-          追加
-        </Button>
+        {#if newScheduleScopeType === 'group'}
+          <div class="group-select-row">
+            <select class="select-like compact-select" bind:value={newScheduleGroup} aria-label="追加する予定のグループ">
+              {#each availableGroups as group}
+                <option value={group}>{group}</option>
+              {/each}
+            </select>
+          </div>
+        {/if}
       </div>
 
       <div class="schedule-list">
@@ -870,38 +1251,73 @@
               type="button"
               aria-label="予定の順番を変更"
               title="ドラッグして順番を変更"
-              disabled={selectedItems.length < 2}
+              disabled={selectedItems.length < 2 || isReadOnlyItem(item)}
               on:pointerdown={(event) => startScheduleDrag(event, item.id)}
               on:keydown={(event) => handleScheduleHandleKeydown(event, item.id)}
             >
               <GripVertical size={18} />
             </button>
-            <Input
-              class="schedule-text-input"
-              style={`color: ${colorHex(item.color)};`}
-              value={item.text}
-              maxlength="120"
-              on:input={(e) => updateSchedule(item.id, { text: e.currentTarget.value })}
-            />
-            <div class="color-palette" role="radiogroup" aria-label="予定の色">
-              {#each colorOptions as color}
-                <button
-                  type="button"
-                  class={`color-swatch color-swatch-${color}`}
-                  class:active={item.color === color}
-                  role="radio"
-                  aria-checked={item.color === color}
-                  aria-label={colorLabels[color]}
-                  title={colorLabels[color]}
-                  on:click={() => updateSchedule(item.id, { color })}
-                >
-                  <span></span>
-                </button>
-              {/each}
+            <div class="schedule-edit-grid">
+              <Input
+                class="schedule-text-input schedule-input-cell"
+                style={`color: ${colorHex(item.color)};`}
+                value={item.text}
+                maxlength="120"
+                disabled={isReadOnlyItem(item)}
+                on:input={(e) => updateSchedule(item.id, { text: e.currentTarget.value })}
+              />
+              <div class="color-palette schedule-color-cell" role="radiogroup" aria-label="予定の色" aria-disabled={isReadOnlyItem(item)}>
+                {#each colorOptions as color}
+                  <button
+                    type="button"
+                    class={`color-swatch color-swatch-${color}`}
+                    class:active={item.color === color}
+                    role="radio"
+                    aria-checked={item.color === color}
+                    aria-label={colorLabels[color]}
+                    title={colorLabels[color]}
+                    disabled={isReadOnlyItem(item)}
+                    on:click={() => updateSchedule(item.id, { color })}
+                  >
+                    <span></span>
+                  </button>
+                {/each}
+              </div>
+              {#if showScopeSelector && !isReadOnlyItem(item)}
+                <div class="scope-toggle schedule-scope-cell" role="group" aria-label="予定の種別">
+                  {#each scopeToggleOptions() as option}
+                    <button type="button" class:active={scopeSelectValue(item.scopeType) === option.value} on:click={() => updateSchedule(item.id, { scopeType: option.value })} aria-pressed={scopeSelectValue(item.scopeType) === option.value} aria-label={scopeOptionLabel(option.value)} title={scopeOptionLabel(option.value)}>
+                      {#if option.value === 'personal'}
+                        <UserRound size={16} />
+                      {:else if option.value === 'group'}
+                        <UsersRound size={16} />
+                      {:else}
+                        <Globe size={16} />
+                      {/if}
+                    </button>
+                  {/each}
+                </div>
+              {/if}
+              {#if !isReadOnlyItem(item)}
+                <Button class="schedule-delete-cell" color="red" on:click={() => deleteSchedule(item.id)} aria-label="予定を削除">
+                  <Trash2 size={16} />
+                </Button>
+              {/if}
             </div>
-            <Button color="red" on:click={() => deleteSchedule(item.id)} aria-label="予定を削除">
-              <Trash2 size={16} />
-            </Button>
+            {#if item.scopeType === 'group'}
+              <div class="group-select-row">
+                <select
+                  class="select-like compact-select"
+                  value={item.group}
+                  aria-label="予定のグループ"
+                  on:change={(e) => handleScheduleGroupChange(item.id, e)}
+                >
+                  {#each availableGroups as group}
+                    <option value={group}>{group}</option>
+                  {/each}
+                </select>
+              </div>
+            {/if}
           </div>
         {/each}
         {#if selectedItems.length === 0}
@@ -910,6 +1326,30 @@
       </div>
     {:else}
       <div class="multi-editor-form">
+        {#if showScopeSelector}
+          <div class="scope-toggle" role="group" aria-label="期間予定の種別">
+            {#each scopeToggleOptions() as option}
+              <button type="button" class:active={newMultiDayScopeType === option.value} on:click={() => setNewMultiDayScopeType(option.value)} aria-pressed={newMultiDayScopeType === option.value} aria-label={scopeOptionLabel(option.value)} title={scopeOptionLabel(option.value)}>
+                {#if option.value === 'personal'}
+                  <UserRound size={16} />
+                {:else if option.value === 'group'}
+                  <UsersRound size={16} />
+                {:else}
+                  <Globe size={16} />
+                {/if}
+              </button>
+            {/each}
+          </div>
+          {#if newMultiDayScopeType === 'group'}
+            <div class="group-select-row">
+              <select class="select-like compact-select" bind:value={newMultiDayGroup} aria-label="追加する期間予定のグループ">
+                {#each availableGroups as group}
+                  <option value={group}>{group}</option>
+                {/each}
+              </select>
+            </div>
+          {/if}
+        {/if}
         <div class="field">
           <span>開始日</span>
           <Input type="date" bind:value={newMultiDay.startDate} />
@@ -953,21 +1393,50 @@
 <Modal title="期間予定の編集" bind:open={multiDayModalOpen} size="md">
   {#if selectedMultiDayItem}
     <div class="multi-editor-form">
+      {#if showScopeSelector && !isReadOnlyItem(selectedMultiDayItem)}
+        <div class="scope-toggle" role="group" aria-label="期間予定の種別">
+          {#each scopeToggleOptions() as option}
+            <button type="button" class:active={scopeSelectValue(selectedMultiDayItem.scopeType) === option.value} on:click={() => updateMultiDay(selectedMultiDayItem.id, { scopeType: option.value })} aria-pressed={scopeSelectValue(selectedMultiDayItem.scopeType) === option.value} aria-label={scopeOptionLabel(option.value)} title={scopeOptionLabel(option.value)}>
+              {#if option.value === 'personal'}
+                <UserRound size={16} />
+              {:else if option.value === 'group'}
+                <UsersRound size={16} />
+              {:else}
+                <Globe size={16} />
+              {/if}
+            </button>
+          {/each}
+        </div>
+        {#if selectedMultiDayItem.scopeType === 'group'}
+          <div class="group-select-row">
+            <select
+              class="select-like compact-select"
+              value={selectedMultiDayItem.group}
+              aria-label="期間予定のグループ"
+              on:change={(e) => handleMultiDayGroupChange(selectedMultiDayItem.id, e)}
+            >
+              {#each availableGroups as group}
+                <option value={group}>{group}</option>
+              {/each}
+            </select>
+          </div>
+        {/if}
+      {/if}
       <div class="field">
         <span>開始日</span>
-        <Input type="date" value={selectedMultiDayItem.startDate} on:change={(e) => updateMultiDay(selectedMultiDayItem.id, { startDate: e.currentTarget.value })} />
+        <Input type="date" value={selectedMultiDayItem.startDate} disabled={isReadOnlyItem(selectedMultiDayItem)} on:change={(e) => updateMultiDay(selectedMultiDayItem.id, { startDate: e.currentTarget.value })} />
       </div>
       <div class="field">
         <span>終了日</span>
-        <Input type="date" value={selectedMultiDayItem.endDate} on:change={(e) => updateMultiDay(selectedMultiDayItem.id, { endDate: e.currentTarget.value })} />
+        <Input type="date" value={selectedMultiDayItem.endDate} disabled={isReadOnlyItem(selectedMultiDayItem)} on:change={(e) => updateMultiDay(selectedMultiDayItem.id, { endDate: e.currentTarget.value })} />
       </div>
       <div class="field">
         <span>予定名</span>
-        <Input value={selectedMultiDayItem.text} placeholder="予定名" maxlength="80" on:input={(e) => updateMultiDay(selectedMultiDayItem.id, { text: e.currentTarget.value })} />
+        <Input value={selectedMultiDayItem.text} placeholder="予定名" maxlength="80" disabled={isReadOnlyItem(selectedMultiDayItem)} on:input={(e) => updateMultiDay(selectedMultiDayItem.id, { text: e.currentTarget.value })} />
       </div>
       <div class="field">
         <span>色</span>
-        <div class="color-palette" role="radiogroup" aria-label="期間予定の色">
+        <div class="color-palette" role="radiogroup" aria-label="期間予定の色" aria-disabled={isReadOnlyItem(selectedMultiDayItem)}>
           {#each colorOptions as color}
             <button
               type="button"
@@ -977,6 +1446,7 @@
               aria-checked={selectedMultiDayItem.color === color}
               aria-label={colorLabels[color]}
               title={colorLabels[color]}
+              disabled={isReadOnlyItem(selectedMultiDayItem)}
               on:click={() => updateMultiDay(selectedMultiDayItem.id, { color })}
             >
               <span></span>
@@ -985,10 +1455,12 @@
         </div>
       </div>
       <div class="modal-actions">
-        <Button color="red" on:click={() => deleteMultiDay(selectedMultiDayItem.id)} aria-label="期間予定を削除">
-          <Trash2 size={16} class="mr-2" />
-          削除
-        </Button>
+        {#if !isReadOnlyItem(selectedMultiDayItem)}
+          <Button color="red" on:click={() => deleteMultiDay(selectedMultiDayItem.id)} aria-label="期間予定を削除">
+            <Trash2 size={16} class="mr-2" />
+            削除
+          </Button>
+        {/if}
       </div>
     </div>
   {/if}
@@ -1056,6 +1528,10 @@
     font-size: 13px;
   }
 
+  .auth-meta {
+    margin-top: 2px;
+  }
+
   .controls,
   .multi-form,
   .multi-row,
@@ -1067,7 +1543,19 @@
     flex-wrap: wrap;
   }
 
+  .controls {
+    align-items: flex-end;
+  }
+
   .controls > label {
+    display: grid;
+    gap: 4px;
+    color: #374151;
+    font-size: 12px;
+    font-weight: 700;
+  }
+
+  .control-field {
     display: grid;
     gap: 4px;
     color: #374151;
@@ -1077,7 +1565,7 @@
 
   .select-like {
     height: 42px;
-    min-width: 104px;
+    min-width: 88px;
     border: 1px solid #d1d5db;
     border-radius: 6px;
     background: #ffffff;
@@ -1087,7 +1575,101 @@
   }
 
   .year-input {
-    width: 112px;
+    width: 98px;
+  }
+
+  .month-select {
+    min-width: 90px;
+  }
+
+  .weekstart-select {
+    min-width: 106px;
+  }
+
+  .compact-select {
+    min-width: 140px;
+  }
+
+  .scope-toggle {
+    display: inline-flex;
+    gap: 2px;
+    width: fit-content;
+    max-width: 100%;
+    border: 1px solid #d1d5db;
+    border-radius: 7px;
+    background: #f3f4f6;
+    padding: 2px;
+  }
+
+  .scope-toggle button {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 42px;
+    min-width: 42px;
+    height: 42px;
+    border: 0;
+    border-radius: 5px;
+    background: transparent;
+    padding: 0;
+    color: #374151;
+    font-size: 14px;
+    font-weight: 800;
+    cursor: pointer;
+    transition:
+      background-color 0.16s ease,
+      color 0.16s ease,
+      box-shadow 0.16s ease,
+      transform 0.16s ease;
+  }
+
+  .scope-toggle button.active {
+    background: #ffffff;
+    color: #111827;
+    box-shadow: 0 1px 2px rgb(17 24 39 / 12%);
+  }
+
+  .toolbar-scope-toggle button.active {
+    background: #2563eb;
+    color: #ffffff;
+    box-shadow: none;
+  }
+
+  .toolbar-action-toggle button {
+    gap: 4px;
+    width: auto;
+    min-width: 42px;
+    padding: 0 12px;
+  }
+
+  .toolbar-action-toggle button:hover:not(:disabled):not(.active) {
+    background: #e5e7eb;
+    color: #111827;
+  }
+
+  .toolbar-action-toggle button.active {
+    background: #2563eb;
+    color: #ffffff;
+    box-shadow: none;
+  }
+
+  .toolbar-action-toggle button.active:hover:not(:disabled) {
+    background: #1d4ed8;
+  }
+
+  .toolbar-action-toggle button:disabled {
+    cursor: default;
+    opacity: 0.5;
+  }
+
+  .scope-toggle button :global(svg) {
+    width: 16px;
+    height: 16px;
+  }
+
+  .scope-toggle button:focus-visible {
+    outline: 2px solid rgb(37 99 235 / 35%);
+    outline-offset: 1px;
   }
 
   .status {
@@ -1342,45 +1924,6 @@
     padding: 16px;
   }
 
-  .toolbar-data {
-    position: relative;
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    border-left: 1px solid #d1d5db;
-    margin-left: 4px;
-    padding-left: 14px;
-  }
-
-  .toolbar-data-menu {
-    position: absolute;
-    top: calc(100% + 8px);
-    right: 0;
-    z-index: 40;
-    display: grid;
-    gap: 10px;
-    min-width: 280px;
-    border: 1px solid #d1d5db;
-    border-radius: 8px;
-    background: #ffffff;
-    padding: 10px;
-    box-shadow: 0 12px 28px rgb(17 24 39 / 18%);
-  }
-
-  .toolbar-data-menu :global(button),
-  .toolbar-data-menu .file-button {
-    width: 100%;
-    justify-content: center;
-  }
-
-  .data-chevron {
-    transition: transform 0.16s ease;
-  }
-
-  .data-chevron.open {
-    transform: rotate(180deg);
-  }
-
   .multi-form,
   .multi-row {
     align-items: center;
@@ -1562,35 +2105,7 @@
     }
   }
 
-  .file-button {
-    display: inline-flex;
-    align-items: center;
-    height: 42px;
-    border: 1px solid #d1d5db;
-    border-radius: 6px;
-    background: #ffffff;
-    padding: 0 14px;
-    color: #111827;
-    font-size: 14px;
-    font-weight: 700;
-    cursor: pointer;
-    transition:
-      background-color 0.15s ease,
-      border-color 0.15s ease,
-      box-shadow 0.15s ease;
-  }
-
-  .file-button:hover {
-    border-color: #9ca3af;
-    background: #f3f4f6;
-  }
-
-  .file-button:focus-within {
-    border-color: #2563eb;
-    box-shadow: 0 0 0 3px rgb(37 99 235 / 20%);
-  }
-
-  .file-button input {
+  .toolbar-file-input {
     display: none;
   }
 
@@ -1607,18 +2122,65 @@
   }
 
   .schedule-add {
+    display: grid;
+    gap: 8px;
+    width: 100%;
+  }
+
+  .schedule-add-main,
+  .schedule-edit-grid {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto auto auto;
     align-items: center;
+    gap: 8px;
+    width: 100%;
+    min-width: 0;
   }
 
   .schedule-row {
     display: grid;
-    grid-template-columns: 34px minmax(0, 1fr) minmax(72px, 96px) auto;
-    align-items: center;
+    grid-template-columns: 34px minmax(0, 1fr);
+    align-items: start;
     gap: 8px;
     padding: 8px;
     border: 1px solid #e5e7eb;
     border-radius: 6px;
     background: #f9fafb;
+  }
+
+  .schedule-input-cell {
+    min-width: 0;
+    width: 100%;
+  }
+
+  .schedule-input-cell :global(.relative),
+  .schedule-input-cell :global(input) {
+    width: 100%;
+  }
+
+  .schedule-color-cell {
+    justify-self: start;
+  }
+
+  .schedule-scope-cell {
+    justify-self: start;
+  }
+
+  .schedule-action-cell,
+  .schedule-delete-cell {
+    justify-self: end;
+  }
+
+  .group-select-row {
+    width: 100%;
+  }
+
+  .schedule-row .group-select-row {
+    grid-column: 2;
+  }
+
+  .group-select-row .select-like {
+    width: min(240px, 100%);
   }
 
   .schedule-row.dragging {
@@ -1653,9 +2215,10 @@
     opacity: 0.35;
   }
 
-  .schedule-row .color-palette {
+  .schedule-row .color-palette,
+  .schedule-add .color-palette {
     min-width: 0;
-    width: 100%;
+    width: fit-content;
     justify-content: center;
   }
 
@@ -1671,23 +2234,7 @@
 
     .controls {
       margin-top: 14px;
-    }
-
-    .toolbar-data {
-      width: 100%;
-      border-left: 0;
-      border-top: 1px solid #d1d5db;
-      margin-left: 0;
-      margin-top: 4px;
-      padding-left: 0;
-      padding-top: 12px;
-    }
-
-    .toolbar-data-menu {
-      position: static;
-      width: 100%;
-      margin-top: 8px;
-      box-shadow: none;
+      gap: 8px;
     }
 
     .calendar-preview {
@@ -1697,6 +2244,52 @@
     .weekday-grid,
     .week-stack {
       min-width: 920px;
+    }
+
+    .schedule-add-main,
+    .schedule-edit-grid {
+      grid-template-columns: auto minmax(0, 1fr) auto;
+      align-items: stretch;
+    }
+
+    .schedule-input-cell {
+      grid-column: 1 / -1;
+    }
+
+    .schedule-color-cell {
+      grid-column: 1;
+      justify-self: start;
+    }
+
+    .schedule-scope-cell {
+      grid-column: 2;
+      justify-self: stretch;
+    }
+
+    .schedule-scope-cell.scope-toggle {
+      width: 100%;
+    }
+
+    .schedule-scope-cell.scope-toggle button {
+      flex: 1 1 0;
+      width: auto;
+    }
+
+    .schedule-action-cell,
+    .schedule-delete-cell {
+      grid-column: 3;
+      align-self: stretch;
+    }
+
+    .schedule-delete-cell :global(button),
+    .schedule-action-cell :global(button) {
+      height: 100%;
+    }
+
+    .drag-handle {
+      grid-row: 1 / span 2;
+      height: 100%;
+      min-height: 92px;
     }
   }
 </style>

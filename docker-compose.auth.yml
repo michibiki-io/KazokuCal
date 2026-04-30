@@ -1,0 +1,35 @@
+services:
+  calendar-app:
+    environment:
+      AUTH_ENABLED: "true"
+      AUTH_USER_HEADER: "X-Forwarded-User"
+      AUTH_EMAIL_HEADER: "X-Forwarded-Email"
+      AUTH_GROUPS_HEADER: "X-Forwarded-Groups"
+      AUTHORIZED_GROUPS: "family,dev,ops"
+
+  auth-alice:
+    image: nginx:1.27-alpine
+    depends_on:
+      - calendar-app
+    ports:
+      - "28181:80"
+    volumes:
+      - ./compose/header-auth/alice.conf:/etc/nginx/conf.d/default.conf:ro
+
+  auth-bob:
+    image: nginx:1.27-alpine
+    depends_on:
+      - calendar-app
+    ports:
+      - "28182:80"
+    volumes:
+      - ./compose/header-auth/bob.conf:/etc/nginx/conf.d/default.conf:ro
+
+  auth-carol:
+    image: nginx:1.27-alpine
+    depends_on:
+      - calendar-app
+    ports:
+      - "28183:80"
+    volumes:
+      - ./compose/header-auth/carol.conf:/etc/nginx/conf.d/default.conf:ro

@@ -13,6 +13,7 @@ type Config struct {
 	UserHeader   string
 	EmailHeader  string
 	GroupsHeader string
+	AuthorizedGroups map[string]struct{}
 }
 
 type UserInfo struct {
@@ -24,10 +25,11 @@ type UserInfo struct {
 
 func ConfigFromEnv() Config {
 	return Config{
-		Enabled:      strings.EqualFold(os.Getenv("AUTH_ENABLED"), "true"),
-		UserHeader:   envOrDefault("AUTH_USER_HEADER", "X-Forwarded-User"),
-		EmailHeader:  envOrDefault("AUTH_EMAIL_HEADER", "X-Forwarded-Email"),
-		GroupsHeader: envOrDefault("AUTH_GROUPS_HEADER", "X-Forwarded-Groups"),
+		Enabled:          strings.EqualFold(os.Getenv("AUTH_ENABLED"), "true"),
+		UserHeader:       envOrDefault("AUTH_USER_HEADER", "X-Forwarded-User"),
+		EmailHeader:      envOrDefault("AUTH_EMAIL_HEADER", "X-Forwarded-Email"),
+		GroupsHeader:     envOrDefault("AUTH_GROUPS_HEADER", "X-Forwarded-Groups"),
+		AuthorizedGroups: parseAuthorizedGroups(os.Getenv("AUTHORIZED_GROUPS")),
 	}
 }
 
@@ -50,7 +52,7 @@ func InfoFromRequest(r *http.Request, cfg Config) UserInfo {
 		Authenticated: user != "",
 		User:          user,
 		Email:         email,
-		Groups:        splitGroups(r.Header.Get(cfg.GroupsHeader)),
+		Groups:        filterAuthorizedGroups(splitGroups(r.Header.Get(cfg.GroupsHeader)), cfg.AuthorizedGroups),
 	}
 }
 
@@ -72,12 +74,45 @@ func splitGroups(value string) []string {
 	}
 	parts := strings.FieldsFunc(value, func(r rune) bool { return r == ',' || r == ';' })
 	groups := make([]string, 0, len(parts))
+	seen := map[string]struct{}{}
 	for _, part := range parts {
 		if trimmed := strings.TrimSpace(part); trimmed != "" {
+			if _, ok := seen[trimmed]; ok {
+				continue
+			}
+			seen[trimmed] = struct{}{}
 			groups = append(groups, trimmed)
 		}
 	}
 	return groups
+}
+
+func parseAuthorizedGroups(value string) map[string]struct{} {
+	groups := splitGroups(value)
+	if len(groups) == 0 {
+		return nil
+	}
+	allowed := make(map[string]struct{}, len(groups))
+	for _, group := range groups {
+		allowed[group] = struct{}{}
+	}
+	return allowed
+}
+
+func filterAuthorizedGroups(groups []string, allowed map[string]struct{}) []string {
+	if len(groups) == 0 {
+		return []string{}
+	}
+	if len(allowed) == 0 {
+		return groups
+	}
+	filtered := make([]string, 0, len(groups))
+	for _, group := range groups {
+		if _, ok := allowed[group]; ok {
+			filtered = append(filtered, group)
+		}
+	}
+	return filtered
 }
 
 func envOrDefault(key, fallback string) string {

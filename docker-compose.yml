@@ -12,6 +12,7 @@ services:
       AUTH_USER_HEADER: "X-Forwarded-User"
       AUTH_EMAIL_HEADER: "X-Forwarded-Email"
       AUTH_GROUPS_HEADER: "X-Forwarded-Groups"
+      AUTHORIZED_GROUPS: "${AUTHORIZED_GROUPS:-}"
       APP_BASE_PATH: "${APP_BASE_PATH:-}"
       DB_DSN: "kazokucal:kazokucal@tcp(mariadb:3306)/kazokucal?parseTime=true&charset=utf8mb4&loc=Asia%2FTokyo"
 

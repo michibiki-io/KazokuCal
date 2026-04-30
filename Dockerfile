@@ -19,6 +19,7 @@ ENV PORT=8080 \
     AUTH_USER_HEADER=X-Forwarded-User \
     AUTH_EMAIL_HEADER=X-Forwarded-Email \
     AUTH_GROUPS_HEADER=X-Forwarded-Groups \
+    AUTHORIZED_GROUPS= \
     APP_BASE_PATH= \
     STATIC_DIR=/app/static \
     PDFGEN_SCRIPT=/app/pdfgen/generate_calendar.py \

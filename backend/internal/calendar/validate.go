@@ -41,6 +41,7 @@ func ValidatePDFRequest(req PDFRequest) []ValidationError {
 		if !validColor(item.Color) {
 			errs = append(errs, ValidationError{Field: prefix + ".color", Message: "color must be black, red, or blue"})
 		}
+		errs = append(errs, validateScope(prefix, item.ScopeType, item.Group)...)
 	}
 
 	for i, item := range req.MultiDayItems {
@@ -65,6 +66,7 @@ func ValidatePDFRequest(req PDFRequest) []ValidationError {
 		if !validColor(item.Color) {
 			errs = append(errs, ValidationError{Field: prefix + ".color", Message: "color must be black, red, or blue"})
 		}
+		errs = append(errs, validateScope(prefix, item.ScopeType, item.Group)...)
 	}
 
 	return errs
@@ -76,4 +78,21 @@ func validColor(color Color) bool {
 
 func parseDate(value string) (time.Time, error) {
 	return time.Parse("2006-01-02", value)
+}
+
+func validateScope(prefix string, scope ScheduleScope, group string) []ValidationError {
+	var errs []ValidationError
+	switch scope {
+	case "", ScheduleScopePersonal, ScheduleScopeWorld:
+		if strings.TrimSpace(group) != "" {
+			errs = append(errs, ValidationError{Field: prefix + ".group", Message: "group must be empty unless scopeType is group"})
+		}
+	case ScheduleScopeGroup:
+		if strings.TrimSpace(group) == "" {
+			errs = append(errs, ValidationError{Field: prefix + ".group", Message: "group is required when scopeType is group"})
+		}
+	default:
+		errs = append(errs, ValidationError{Field: prefix + ".scopeType", Message: "scopeType must be personal, group, or world"})
+	}
+	return errs
 }

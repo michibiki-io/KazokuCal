@@ -97,7 +97,8 @@ func NewRouter(cfg Config) *gin.Engine {
 			c.JSON(http.StatusBadRequest, gin.H{"error": "year must be 1900-2100 and month must be 1-12"})
 			return
 		}
-		data, err := calendarStore.LoadCalendar(c.Request.Context(), ownerKey(c, cfg.Auth), query.Year, query.Month)
+		opts := calendarLoadOptions(c, cfg.Auth)
+		data, err := calendarStore.LoadCalendar(c.Request.Context(), opts, query.Year, query.Month)
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 			return
@@ -116,7 +117,8 @@ func NewRouter(cfg Config) *gin.Engine {
 			c.JSON(http.StatusBadRequest, gin.H{"error": "validation failed", "details": errs})
 			return
 		}
-		if err := calendarStore.SaveCalendar(c.Request.Context(), ownerKey(c, cfg.Auth), req); err != nil {
+		opts := calendarSaveOptions(c, cfg.Auth)
+		if err := calendarStore.SaveCalendar(c.Request.Context(), opts, req); err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 			return
 		}
@@ -233,6 +235,49 @@ func ownerKey(c *gin.Context, cfg auth.Config) string {
 		return info.Email
 	}
 	return "default"
+}
+
+func calendarLoadOptions(c *gin.Context, cfg auth.Config) storage.CalendarLoadOptions {
+	info := auth.ContextUser(c, cfg)
+	primaryOwnerKey := ownerKey(c, cfg)
+	primaryScopeType := calendar.ScheduleScopePersonal
+	if primaryOwnerKey == storage.WorldOwnerKey {
+		primaryScopeType = calendar.ScheduleScopeWorld
+	}
+	opts := storage.CalendarLoadOptions{
+		PrimaryOwnerKey: primaryOwnerKey,
+		VisibleScopes: []storage.CalendarScope{
+			{OwnerKey: primaryOwnerKey, Type: primaryScopeType},
+		},
+	}
+	if opts.PrimaryOwnerKey != storage.WorldOwnerKey {
+		opts.VisibleScopes = append(opts.VisibleScopes, storage.CalendarScope{
+			OwnerKey: storage.WorldOwnerKey,
+			Type:     calendar.ScheduleScopeWorld,
+		})
+	}
+	for _, group := range info.Groups {
+		opts.VisibleScopes = append(opts.VisibleScopes, storage.CalendarScope{
+			OwnerKey: storage.GroupOwnerKey(group),
+			Type:     calendar.ScheduleScopeGroup,
+			Group:    group,
+		})
+	}
+	return opts
+}
+
+func calendarSaveOptions(c *gin.Context, cfg auth.Config) storage.CalendarSaveOptions {
+	info := auth.ContextUser(c, cfg)
+	groupOwnerKeys := make(map[string]string, len(info.Groups))
+	for _, group := range info.Groups {
+		groupOwnerKeys[group] = storage.GroupOwnerKey(group)
+	}
+	personalOwnerKey := ownerKey(c, cfg)
+	return storage.CalendarSaveOptions{
+		PersonalOwnerKey: personalOwnerKey,
+		GroupOwnerKeys:   groupOwnerKeys,
+		AllowWorldWrite:  true,
+	}
 }
 
 func normalizeBasePath(value string) string {

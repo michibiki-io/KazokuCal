@@ -20,20 +20,34 @@ type TeleworkStatus struct {
 	Mama bool `json:"mama"`
 }
 
+type ScheduleScope string
+
+const (
+	ScheduleScopePersonal ScheduleScope = "personal"
+	ScheduleScopeGroup    ScheduleScope = "group"
+	ScheduleScopeWorld    ScheduleScope = "world"
+)
+
 type ScheduleItem struct {
-	ID    string `json:"id"`
-	Date  string `json:"date"`
-	Text  string `json:"text"`
-	Color Color  `json:"color"`
+	ID        string        `json:"id"`
+	SourceID  string        `json:"sourceId,omitempty"`
+	Date      string        `json:"date"`
+	Text      string        `json:"text"`
+	Color     Color         `json:"color"`
+	ScopeType ScheduleScope `json:"scopeType,omitempty"`
+	Group     string        `json:"group,omitempty"`
 }
 
 type MultiDayScheduleItem struct {
-	ID        string `json:"id"`
-	StartDate string `json:"startDate"`
-	EndDate   string `json:"endDate"`
-	Text      string `json:"text"`
-	Color     Color  `json:"color"`
-	Arrow     bool   `json:"arrow"`
+	ID        string        `json:"id"`
+	SourceID  string        `json:"sourceId,omitempty"`
+	StartDate string        `json:"startDate"`
+	EndDate   string        `json:"endDate"`
+	Text      string        `json:"text"`
+	Color     Color         `json:"color"`
+	Arrow     bool          `json:"arrow"`
+	ScopeType ScheduleScope `json:"scopeType,omitempty"`
+	Group     string        `json:"group,omitempty"`
 }
 
 type PDFRequest struct {
