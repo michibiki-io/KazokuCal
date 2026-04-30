@@ -195,3 +195,4 @@ docker compose -f docker-compose.yml -f docker-compose.auth.yml up --build
 
 - 複数日の帯予定は週ごとに分割して描画します。
 - 1 つの週に多数の帯予定が重なる場合、PDF とプレビューでは上位数件を優先表示します。
+
