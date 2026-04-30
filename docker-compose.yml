@@ -1,6 +1,11 @@
 services:
   calendar-app:
-    build: .
+    build:
+      context: .
+      args:
+        BUILD_VERSION: "${BUILD_VERSION:-}"
+        BUILD_COMMIT: "${BUILD_COMMIT:-}"
+        GITHUB_REPOSITORY: "${GITHUB_REPOSITORY:-michibiki-io/KazokuCal}"
     depends_on:
       mariadb:
         condition: service_healthy

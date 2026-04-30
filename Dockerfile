@@ -1,4 +1,10 @@
 FROM node:22-bookworm-slim AS frontend-build
+ARG BUILD_VERSION=
+ARG BUILD_COMMIT=
+ARG GITHUB_REPOSITORY=michibiki-io/KazokuCal
+ENV BUILD_VERSION=${BUILD_VERSION} \
+    BUILD_COMMIT=${BUILD_COMMIT} \
+    GITHUB_REPOSITORY=${GITHUB_REPOSITORY}
 WORKDIR /src/frontend
 COPY frontend/package*.json ./
 RUN npm ci
