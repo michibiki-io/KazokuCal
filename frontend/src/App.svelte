@@ -2,9 +2,9 @@
   import { onDestroy, onMount } from 'svelte';
   import { Button, Checkbox, Input, Modal } from 'flowbite-svelte';
   import {
-    CalendarDays,
     Download,
     Eye,
+    Github,
     Globe,
     GripVertical,
     Plus,
@@ -65,7 +65,16 @@
     isLast: boolean;
   };
 
+  declare const __APP_VERSION__: string;
+  declare const __GITHUB_REPOSITORY__: string;
+  declare const __RELEASE_COMMIT__: string;
+
   const legacyStorageKey = 'kazokucal.calendar.v1';
+  const appVersion = formatAppVersion(__APP_VERSION__);
+  const releaseCommit = __RELEASE_COMMIT__;
+  const shortReleaseCommit = releaseCommit ? releaseCommit.slice(0, 7) : '';
+  const githubRepositoryUrl = __GITHUB_REPOSITORY__ ? `https://github.com/${__GITHUB_REPOSITORY__}` : '';
+  const releaseCommitUrl = githubRepositoryUrl && releaseCommit ? `${githubRepositoryUrl}/commit/${releaseCommit}` : githubRepositoryUrl;
   const monthNames = [
     '',
     'January',
@@ -95,6 +104,7 @@
 
   let data: CalendarData = defaultData();
   let userInfo: UserInfo = { authenticated: false, groups: [] };
+  let userMenuOpen = false;
   let showPersonalSchedules = true;
   let showGroupSchedules = true;
   let showWorldSchedules = true;
@@ -129,6 +139,7 @@
   let dragOverScheduleId = '';
 
   $: availableGroups = userInfo.groups ?? [];
+  $: userDisplayName = userInfo.user ?? userInfo.email ?? 'authenticated';
   $: supportsGroupSchedules = availableGroups.length > 0;
   $: canEditWorldSchedules = true;
   $: canChoosePersonalSchedules = userInfo.authenticated;
@@ -169,6 +180,19 @@
 
   function apiPath(path: string): string {
     return `api/${path.replace(/^\/+/, '')}`;
+  }
+
+  function handleUserMenuFocusOut(event: FocusEvent) {
+    const nextTarget = event.relatedTarget;
+    if (nextTarget instanceof Node && event.currentTarget instanceof HTMLElement && event.currentTarget.contains(nextTarget)) return;
+    userMenuOpen = false;
+  }
+
+  function formatAppVersion(version: string): string {
+    const normalized = version.trim();
+    if (!normalized) return '';
+    if (normalized.startsWith('v') || !/^\d+\.\d+\.\d+/.test(normalized)) return normalized;
+    return `v${normalized}`;
   }
 
   async function initializeApp() {
@@ -979,18 +1003,40 @@
 <main class="app-shell">
   <section class="toolbar">
     <div class="title-row">
-      <CalendarDays size={30} />
+      <svg class="brand-icon" viewBox="0 0 24 24" aria-hidden="true">
+        <path
+          fill="none"
+          stroke="currentColor"
+          stroke-width="2"
+          d="M17,7 L23,7 L23,23 L7,23 L7,19 M23,11 L17,11 M13,0 L13,3 M1,7 L17,7 M1,3 L17,3 L17,19 L1,19 L1,3 Z M5,0 L5,3 M4,11 L6,11 M8,11 L14,11 M4,15 L6,15 M8,15 L14,15"
+        />
+      </svg>
       <div>
-        <h1>KazokuCal</h1>
-        <p>{data.year}年 {data.month}月 / {monthNames[data.month]}</p>
-        {#if userInfo.authenticated}
-          <p class="auth-meta">
-            {userInfo.user ?? userInfo.email ?? 'authenticated'}
-            {#if availableGroups.length > 0}
-              / groups: {availableGroups.join(', ')}
-            {/if}
-          </p>
-        {/if}
+        <div class="app-title-block">
+          <h1>KazokuCal</h1>
+          {#if appVersion || releaseCommitUrl}
+            <div class="app-meta-line">
+              {#if appVersion}
+                <span class="app-version">{appVersion}</span>
+              {/if}
+              {#if releaseCommitUrl}
+                <a
+                  class="app-release-link"
+                  href={releaseCommitUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  aria-label={shortReleaseCommit ? `GitHub release commit ${shortReleaseCommit} を開く` : 'GitHub repository を開く'}
+                  title={shortReleaseCommit ? `GitHub release commit ${shortReleaseCommit}` : 'GitHub repository'}
+                >
+                  <Github size={16} />
+                  {#if shortReleaseCommit}
+                    <span class="app-release-hash">{shortReleaseCommit}</span>
+                  {/if}
+                </a>
+              {/if}
+            </div>
+          {/if}
+        </div>
       </div>
     </div>
 
@@ -1089,6 +1135,43 @@
           <input bind:this={importFileInput} class="toolbar-file-input" type="file" accept="application/json" on:change={importJson} />
         </div>
       </div>
+      {#if userInfo.authenticated}
+        <div class="control-field user-control" on:focusout={handleUserMenuFocusOut}>
+          <span>ユーザ</span>
+          <div class="scope-toggle toolbar-action-toggle user-menu-toggle" role="group" aria-label="ユーザ情報">
+            <button
+              type="button"
+              class:active={userMenuOpen}
+              aria-haspopup="menu"
+              aria-expanded={userMenuOpen}
+              aria-label={`ユーザ情報: ${userDisplayName}`}
+              title={userDisplayName}
+              on:click={() => (userMenuOpen = !userMenuOpen)}
+            >
+              <UserRound size={16} />
+              <span>{userDisplayName}</span>
+            </button>
+          </div>
+          {#if userMenuOpen}
+            <div class="user-menu" role="menu">
+              <dl>
+                <div>
+                  <dt>user</dt>
+                  <dd>{userInfo.user ?? '-'}</dd>
+                </div>
+                <div>
+                  <dt>email</dt>
+                  <dd>{userInfo.email ?? '-'}</dd>
+                </div>
+                <div>
+                  <dt>groups</dt>
+                  <dd>{availableGroups.length > 0 ? availableGroups.join(', ') : '-'}</dd>
+                </div>
+              </dl>
+            </div>
+          {/if}
+        </div>
+      {/if}
     </div>
   </section>
 
@@ -1521,15 +1604,68 @@
   h1 {
     font-size: 22px;
     font-weight: 800;
+    line-height: 1;
   }
 
-  .title-row p {
-    color: #4b5563;
-    font-size: 13px;
+  .brand-icon {
+    width: 30px;
+    height: 30px;
+    color: #111827;
+    flex: 0 0 auto;
   }
 
-  .auth-meta {
-    margin-top: 2px;
+  .app-title-block {
+    display: inline-flex;
+    flex-direction: column;
+    align-items: flex-end;
+    gap: 5px;
+  }
+
+  .app-meta-line {
+    display: inline-flex;
+    align-items: flex-end;
+    gap: 8px;
+  }
+
+  .app-version,
+  .app-release-link {
+    color: #6b7280;
+    font-size: 16px;
+    font-weight: 700;
+    letter-spacing: 0;
+    line-height: 1;
+  }
+
+  .app-release-link {
+    display: inline-flex;
+    align-items: flex-end;
+    gap: 4px;
+    text-decoration: none;
+    opacity: 0.78;
+    transition:
+      color 0.16s ease,
+      opacity 0.16s ease;
+  }
+
+  .app-release-link:hover,
+  .app-release-link:focus-visible {
+    color: #111827;
+    opacity: 1;
+  }
+
+  .app-release-link:focus-visible {
+    border-radius: 4px;
+    outline: 2px solid rgb(37 99 235 / 35%);
+    outline-offset: 2px;
+  }
+
+  .app-release-link :global(svg) {
+    width: 16px;
+    height: 16px;
+  }
+
+  .app-release-hash {
+    font-size: 10px;
   }
 
   .controls,
@@ -1660,6 +1796,61 @@
   .toolbar-action-toggle button:disabled {
     cursor: default;
     opacity: 0.5;
+  }
+
+  .user-control {
+    position: relative;
+  }
+
+  .user-menu-toggle button {
+    max-width: 180px;
+    gap: 6px;
+  }
+
+  .user-menu-toggle button span {
+    min-width: 0;
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+  }
+
+  .user-menu {
+    position: absolute;
+    top: calc(100% + 6px);
+    right: 0;
+    z-index: 20;
+    min-width: 220px;
+    border: 1px solid #d1d5db;
+    border-radius: 7px;
+    background: #ffffff;
+    padding: 10px 12px;
+    box-shadow: 0 10px 24px rgb(17 24 39 / 14%);
+    color: #111827;
+    font-size: 12px;
+    font-weight: 600;
+  }
+
+  .user-menu dl {
+    display: grid;
+    gap: 8px;
+    margin: 0;
+  }
+
+  .user-menu dl > div {
+    display: grid;
+    grid-template-columns: 52px minmax(0, 1fr);
+    gap: 10px;
+  }
+
+  .user-menu dt {
+    color: #6b7280;
+    font-weight: 700;
+  }
+
+  .user-menu dd {
+    min-width: 0;
+    margin: 0;
+    overflow-wrap: anywhere;
   }
 
   .scope-toggle button :global(svg) {

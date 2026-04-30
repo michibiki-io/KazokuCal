@@ -39,6 +39,12 @@ http://localhost:28080
 
 Compose では開発用 MariaDB も同時に起動します。MariaDB はホスト側 `23306` に公開されます。
 
+ビルド情報の表示を確認する場合は、起動時に `BUILD_VERSION` と `BUILD_COMMIT` を指定します。
+
+```bash
+BUILD_VERSION=0.1.0 BUILD_COMMIT="$(git rev-parse HEAD)" docker compose up --build
+```
+
 ## 環境変数
 
 | 変数 | 既定値 | 説明 |
@@ -156,6 +162,13 @@ npm install
 npm run dev
 ```
 
+フロントエンド開発サーバーでも、表示用のビルド情報は環境変数で上書きできます。
+
+```bash
+cd frontend
+VITE_BUILD_VERSION=0.1.0 VITE_BUILD_COMMIT="$(git rev-parse HEAD)" npm run dev
+```
+
 バックエンドだけを実行する場合:
 
 ```bash
@@ -195,4 +208,3 @@ docker compose -f docker-compose.yml -f docker-compose.auth.yml up --build
 
 - 複数日の帯予定は週ごとに分割して描画します。
 - 1 つの週に多数の帯予定が重なる場合、PDF とプレビューでは上位数件を優先表示します。
-
