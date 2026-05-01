@@ -2,6 +2,8 @@
   import { onDestroy, onMount } from 'svelte';
   import { Button, Checkbox, Input, Modal } from 'flowbite-svelte';
   import {
+    Check,
+    Copy,
     Download,
     Eye,
     Github,
@@ -137,6 +139,8 @@
   let previewBusy = false;
   let draggingScheduleId = '';
   let dragOverScheduleId = '';
+  let copyFeedbackKey = '';
+  let copyFeedbackTimer: ReturnType<typeof setTimeout> | undefined;
 
   $: availableGroups = userInfo.groups ?? [];
   $: userDisplayName = userInfo.user ?? userInfo.email ?? 'authenticated';
@@ -176,6 +180,7 @@
 
   onDestroy(() => {
     removeScheduleDragListeners();
+    clearCopyFeedbackTimer();
   });
 
   function apiPath(path: string): string {
@@ -484,6 +489,54 @@
     newMultiDayGroup = availableGroups[0] ?? '';
     dayModalMessage = '';
     dayModalOpen = true;
+  }
+
+  async function copyInputValue(value: string, key: string) {
+    if (!value) return;
+    statusMessage = '';
+    try {
+      await writeClipboardText(value);
+      setCopyFeedback(key);
+    } catch {
+      statusMessage = 'クリップボードへのコピーに失敗しました。';
+    }
+  }
+
+  async function writeClipboardText(value: string) {
+    if (typeof navigator !== 'undefined' && navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(value);
+      return;
+    }
+    if (typeof document === 'undefined') {
+      throw new Error('Clipboard API unavailable');
+    }
+    const textarea = document.createElement('textarea');
+    textarea.value = value;
+    textarea.setAttribute('readonly', 'true');
+    textarea.style.position = 'fixed';
+    textarea.style.opacity = '0';
+    document.body.appendChild(textarea);
+    textarea.select();
+    const copied = document.execCommand('copy');
+    document.body.removeChild(textarea);
+    if (!copied) {
+      throw new Error('Clipboard copy failed');
+    }
+  }
+
+  function setCopyFeedback(key: string) {
+    clearCopyFeedbackTimer();
+    copyFeedbackKey = key;
+    copyFeedbackTimer = setTimeout(() => {
+      copyFeedbackKey = '';
+      copyFeedbackTimer = undefined;
+    }, 1600);
+  }
+
+  function clearCopyFeedbackTimer() {
+    if (!copyFeedbackTimer) return;
+    clearTimeout(copyFeedbackTimer);
+    copyFeedbackTimer = undefined;
   }
 
   function switchDayEditorMode(mode: 'schedule' | 'multi') {
@@ -1272,13 +1325,30 @@
     {#if dayEditorMode === 'schedule'}
       <div class="schedule-add">
         <div class="schedule-add-main">
-          <Input
-            class="schedule-text-input schedule-input-cell"
-            style={`color: ${colorHex(newScheduleColor)};`}
-            placeholder="予定を入力"
-            bind:value={newScheduleText}
-            maxlength="120"
-          />
+          <div class="copyable-input schedule-input-cell">
+            <Input
+              class="schedule-text-input"
+              style={`color: ${colorHex(newScheduleColor)};`}
+              placeholder="予定を入力"
+              bind:value={newScheduleText}
+              maxlength="120"
+            />
+            <button
+              class:copied={copyFeedbackKey === 'new-schedule'}
+              class="copy-button"
+              type="button"
+              aria-label={copyFeedbackKey === 'new-schedule' ? 'コピー済み' : '入力内容をコピー'}
+              title={copyFeedbackKey === 'new-schedule' ? 'コピー済み' : '入力内容をコピー'}
+              disabled={!newScheduleText}
+              on:click={() => copyInputValue(newScheduleText, 'new-schedule')}
+            >
+              {#if copyFeedbackKey === 'new-schedule'}
+                <Check size={16} />
+              {:else}
+                <Copy size={16} />
+              {/if}
+            </button>
+          </div>
           <div class="color-palette schedule-color-cell" role="radiogroup" aria-label="追加する予定の色">
             {#each colorOptions as color}
               <button
@@ -1341,14 +1411,31 @@
               <GripVertical size={18} />
             </button>
             <div class="schedule-edit-grid">
-              <Input
-                class="schedule-text-input schedule-input-cell"
-                style={`color: ${colorHex(item.color)};`}
-                value={item.text}
-                maxlength="120"
-                disabled={isReadOnlyItem(item)}
-                on:input={(e) => updateSchedule(item.id, { text: e.currentTarget.value })}
-              />
+              <div class="copyable-input schedule-input-cell">
+                <Input
+                  class="schedule-text-input"
+                  style={`color: ${colorHex(item.color)};`}
+                  value={item.text}
+                  maxlength="120"
+                  disabled={isReadOnlyItem(item)}
+                  on:input={(e) => updateSchedule(item.id, { text: e.currentTarget.value })}
+                />
+                <button
+                  class:copied={copyFeedbackKey === `schedule-${item.id}`}
+                  class="copy-button"
+                  type="button"
+                  aria-label={copyFeedbackKey === `schedule-${item.id}` ? 'コピー済み' : '入力内容をコピー'}
+                  title={copyFeedbackKey === `schedule-${item.id}` ? 'コピー済み' : '入力内容をコピー'}
+                  disabled={!item.text}
+                  on:click={() => copyInputValue(item.text, `schedule-${item.id}`)}
+                >
+                  {#if copyFeedbackKey === `schedule-${item.id}`}
+                    <Check size={16} />
+                  {:else}
+                    <Copy size={16} />
+                  {/if}
+                </button>
+              </div>
               <div class="color-palette schedule-color-cell" role="radiogroup" aria-label="予定の色" aria-disabled={isReadOnlyItem(item)}>
                 {#each colorOptions as color}
                   <button
@@ -1435,15 +1522,66 @@
         {/if}
         <div class="field">
           <span>開始日</span>
-          <Input type="date" bind:value={newMultiDay.startDate} />
+          <div class="copyable-input">
+            <Input type="date" bind:value={newMultiDay.startDate} />
+            <button
+              class:copied={copyFeedbackKey === 'new-multi-start'}
+              class="copy-button"
+              type="button"
+              aria-label={copyFeedbackKey === 'new-multi-start' ? 'コピー済み' : '入力内容をコピー'}
+              title={copyFeedbackKey === 'new-multi-start' ? 'コピー済み' : '入力内容をコピー'}
+              disabled={!newMultiDay.startDate}
+              on:click={() => copyInputValue(newMultiDay.startDate, 'new-multi-start')}
+            >
+              {#if copyFeedbackKey === 'new-multi-start'}
+                <Check size={16} />
+              {:else}
+                <Copy size={16} />
+              {/if}
+            </button>
+          </div>
         </div>
         <div class="field">
           <span>終了日</span>
-          <Input type="date" bind:value={newMultiDay.endDate} />
+          <div class="copyable-input">
+            <Input type="date" bind:value={newMultiDay.endDate} />
+            <button
+              class:copied={copyFeedbackKey === 'new-multi-end'}
+              class="copy-button"
+              type="button"
+              aria-label={copyFeedbackKey === 'new-multi-end' ? 'コピー済み' : '入力内容をコピー'}
+              title={copyFeedbackKey === 'new-multi-end' ? 'コピー済み' : '入力内容をコピー'}
+              disabled={!newMultiDay.endDate}
+              on:click={() => copyInputValue(newMultiDay.endDate, 'new-multi-end')}
+            >
+              {#if copyFeedbackKey === 'new-multi-end'}
+                <Check size={16} />
+              {:else}
+                <Copy size={16} />
+              {/if}
+            </button>
+          </div>
         </div>
         <div class="field">
           <span>予定名</span>
-          <Input placeholder="予定名（空欄可）" bind:value={newMultiDay.text} maxlength="80" />
+          <div class="copyable-input">
+            <Input placeholder="予定名（空欄可）" bind:value={newMultiDay.text} maxlength="80" />
+            <button
+              class:copied={copyFeedbackKey === 'new-multi-text'}
+              class="copy-button"
+              type="button"
+              aria-label={copyFeedbackKey === 'new-multi-text' ? 'コピー済み' : '入力内容をコピー'}
+              title={copyFeedbackKey === 'new-multi-text' ? 'コピー済み' : '入力内容をコピー'}
+              disabled={!newMultiDay.text}
+              on:click={() => copyInputValue(newMultiDay.text, 'new-multi-text')}
+            >
+              {#if copyFeedbackKey === 'new-multi-text'}
+                <Check size={16} />
+              {:else}
+                <Copy size={16} />
+              {/if}
+            </button>
+          </div>
         </div>
         <div class="field">
           <span>色</span>
@@ -1507,15 +1645,66 @@
       {/if}
       <div class="field">
         <span>開始日</span>
-        <Input type="date" value={selectedMultiDayItem.startDate} disabled={isReadOnlyItem(selectedMultiDayItem)} on:change={(e) => updateMultiDay(selectedMultiDayItem.id, { startDate: e.currentTarget.value })} />
+        <div class="copyable-input">
+          <Input type="date" value={selectedMultiDayItem.startDate} disabled={isReadOnlyItem(selectedMultiDayItem)} on:change={(e) => updateMultiDay(selectedMultiDayItem.id, { startDate: e.currentTarget.value })} />
+          <button
+            class:copied={copyFeedbackKey === `multi-start-${selectedMultiDayItem.id}`}
+            class="copy-button"
+            type="button"
+            aria-label={copyFeedbackKey === `multi-start-${selectedMultiDayItem.id}` ? 'コピー済み' : '入力内容をコピー'}
+            title={copyFeedbackKey === `multi-start-${selectedMultiDayItem.id}` ? 'コピー済み' : '入力内容をコピー'}
+            disabled={!selectedMultiDayItem.startDate}
+            on:click={() => copyInputValue(selectedMultiDayItem.startDate, `multi-start-${selectedMultiDayItem.id}`)}
+          >
+            {#if copyFeedbackKey === `multi-start-${selectedMultiDayItem.id}`}
+              <Check size={16} />
+            {:else}
+              <Copy size={16} />
+            {/if}
+          </button>
+        </div>
       </div>
       <div class="field">
         <span>終了日</span>
-        <Input type="date" value={selectedMultiDayItem.endDate} disabled={isReadOnlyItem(selectedMultiDayItem)} on:change={(e) => updateMultiDay(selectedMultiDayItem.id, { endDate: e.currentTarget.value })} />
+        <div class="copyable-input">
+          <Input type="date" value={selectedMultiDayItem.endDate} disabled={isReadOnlyItem(selectedMultiDayItem)} on:change={(e) => updateMultiDay(selectedMultiDayItem.id, { endDate: e.currentTarget.value })} />
+          <button
+            class:copied={copyFeedbackKey === `multi-end-${selectedMultiDayItem.id}`}
+            class="copy-button"
+            type="button"
+            aria-label={copyFeedbackKey === `multi-end-${selectedMultiDayItem.id}` ? 'コピー済み' : '入力内容をコピー'}
+            title={copyFeedbackKey === `multi-end-${selectedMultiDayItem.id}` ? 'コピー済み' : '入力内容をコピー'}
+            disabled={!selectedMultiDayItem.endDate}
+            on:click={() => copyInputValue(selectedMultiDayItem.endDate, `multi-end-${selectedMultiDayItem.id}`)}
+          >
+            {#if copyFeedbackKey === `multi-end-${selectedMultiDayItem.id}`}
+              <Check size={16} />
+            {:else}
+              <Copy size={16} />
+            {/if}
+          </button>
+        </div>
       </div>
       <div class="field">
         <span>予定名</span>
-        <Input value={selectedMultiDayItem.text} placeholder="予定名" maxlength="80" disabled={isReadOnlyItem(selectedMultiDayItem)} on:input={(e) => updateMultiDay(selectedMultiDayItem.id, { text: e.currentTarget.value })} />
+        <div class="copyable-input">
+          <Input value={selectedMultiDayItem.text} placeholder="予定名" maxlength="80" disabled={isReadOnlyItem(selectedMultiDayItem)} on:input={(e) => updateMultiDay(selectedMultiDayItem.id, { text: e.currentTarget.value })} />
+          <button
+            class:copied={copyFeedbackKey === `multi-text-${selectedMultiDayItem.id}`}
+            class="copy-button"
+            type="button"
+            aria-label={copyFeedbackKey === `multi-text-${selectedMultiDayItem.id}` ? 'コピー済み' : '入力内容をコピー'}
+            title={copyFeedbackKey === `multi-text-${selectedMultiDayItem.id}` ? 'コピー済み' : '入力内容をコピー'}
+            disabled={!selectedMultiDayItem.text}
+            on:click={() => copyInputValue(selectedMultiDayItem.text, `multi-text-${selectedMultiDayItem.id}`)}
+          >
+            {#if copyFeedbackKey === `multi-text-${selectedMultiDayItem.id}`}
+              <Check size={16} />
+            {:else}
+              <Copy size={16} />
+            {/if}
+          </button>
+        </div>
       </div>
       <div class="field">
         <span>色</span>
@@ -2344,9 +2533,64 @@
     width: 100%;
   }
 
+  .copyable-input {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: center;
+    gap: 8px;
+    min-width: 0;
+    width: 100%;
+  }
+
   .schedule-input-cell :global(.relative),
   .schedule-input-cell :global(input) {
     width: 100%;
+  }
+
+  .copyable-input :global(.relative),
+  .copyable-input :global(input) {
+    width: 100%;
+  }
+
+  .copy-button {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 42px;
+    min-width: 42px;
+    height: 42px;
+    border: 1px solid #d1d5db;
+    border-radius: 6px;
+    background: #ffffff;
+    color: #4b5563;
+    padding: 0;
+    cursor: pointer;
+    transition:
+      border-color 0.16s ease,
+      background-color 0.16s ease,
+      color 0.16s ease;
+  }
+
+  .copy-button:hover:not(:disabled) {
+    border-color: #9ca3af;
+    background: #f9fafb;
+    color: #111827;
+  }
+
+  .copy-button.copied {
+    border-color: #16a34a;
+    background: #f0fdf4;
+    color: #15803d;
+  }
+
+  .copy-button:disabled {
+    cursor: default;
+    opacity: 0.45;
+  }
+
+  .copy-button:focus-visible {
+    outline: 3px solid rgb(37 99 235 / 35%);
+    outline-offset: 2px;
   }
 
   .schedule-color-cell {
@@ -2357,8 +2601,8 @@
     justify-self: start;
   }
 
-  .schedule-action-cell,
-  .schedule-delete-cell {
+  :global(.schedule-action-cell),
+  :global(.schedule-delete-cell) {
     justify-self: end;
   }
 
@@ -2439,21 +2683,25 @@
 
     .schedule-add-main,
     .schedule-edit-grid {
-      grid-template-columns: auto minmax(0, 1fr) auto;
+      display: flex;
+      flex-wrap: wrap;
       align-items: stretch;
     }
 
     .schedule-input-cell {
-      grid-column: 1 / -1;
+      order: 1;
+      flex: 1 0 100%;
     }
 
     .schedule-color-cell {
-      grid-column: 1;
+      order: 2;
+      flex: 0 0 auto;
       justify-self: start;
     }
 
     .schedule-scope-cell {
-      grid-column: 2;
+      order: 4;
+      flex: 1 0 100%;
       justify-self: stretch;
     }
 
@@ -2466,19 +2714,21 @@
       width: auto;
     }
 
-    .schedule-action-cell,
-    .schedule-delete-cell {
-      grid-column: 3;
-      align-self: stretch;
+    :global(.schedule-action-cell),
+    :global(.schedule-delete-cell) {
+      order: 3;
+      margin-left: auto;
+      align-self: center;
     }
 
-    .schedule-delete-cell :global(button),
-    .schedule-action-cell :global(button) {
-      height: 100%;
+    :global(.schedule-delete-cell),
+    :global(.schedule-action-cell) {
+      width: auto;
+      min-width: 42px;
+      height: 42px;
     }
 
     .drag-handle {
-      grid-row: 1 / span 2;
       height: 100%;
       min-height: 92px;
     }
