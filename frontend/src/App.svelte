@@ -72,6 +72,7 @@
   declare const __RELEASE_COMMIT__: string;
 
   const legacyStorageKey = 'kazokucal.calendar.v1';
+  const blankTelework: TeleworkStatus = { papa: false, mama: false };
   const appVersion = formatAppVersion(__APP_VERSION__);
   const releaseCommit = __RELEASE_COMMIT__;
   const shortReleaseCommit = releaseCommit ? releaseCommit.slice(0, 7) : '';
@@ -156,7 +157,7 @@
   };
   $: grid = buildGrid(data.year, data.month, data.weekStartsOn);
   $: weekdayOrder = data.weekStartsOn === 'sunday' ? [0, 1, 2, 3, 4, 5, 6] : [1, 2, 3, 4, 5, 6, 0];
-  $: selectedTelework = data.telework[selectedDayKey] ?? { papa: false, mama: false };
+  $: selectedTelework = showWorldSchedules ? data.telework[selectedDayKey] ?? blankTelework : blankTelework;
   $: visibleScheduleItems = scheduleVisibilityKey
     ? data.scheduleItems.filter((item) => isScheduleItemVisible(item))
     : data.scheduleItems.filter((item) => isScheduleItemVisible(item));
@@ -758,7 +759,8 @@
   }
 
   function teleworkForDate(key: string): TeleworkStatus {
-    return data.telework[key] ?? { papa: false, mama: false };
+    if (!showWorldSchedules) return blankTelework;
+    return data.telework[key] ?? blankTelework;
   }
 
   function isScheduleItemVisible(item: ScheduleItem): boolean {
@@ -864,6 +866,7 @@
   function buildPdfPayload(): CalendarData {
     return {
       ...data,
+      telework: showWorldSchedules ? data.telework : {},
       scheduleItems: visibleScheduleItems,
       multiDayItems: visibleMultiDayItems
     };
@@ -1124,7 +1127,7 @@
               <UsersRound size={16} />
             </button>
           {/if}
-          <button type="button" class:active={scopeVisibility.world} on:click={() => toggleScopeVisibility('world')} aria-pressed={scopeVisibility.world} aria-label={`共通予定: ${scopeVisibility.world ? 'ON' : 'OFF'}`} title={`共通予定: ${scopeVisibility.world ? 'ON' : 'OFF'}`}>
+          <button type="button" class:active={scopeVisibility.world} on:click={() => toggleScopeVisibility('world')} aria-pressed={scopeVisibility.world} aria-label={`共通予定・テレワーク: ${scopeVisibility.world ? 'ON' : 'OFF'}`} title={`共通予定・テレワーク: ${scopeVisibility.world ? 'ON' : 'OFF'}`}>
             <Globe size={16} />
           </button>
         </div>
@@ -1308,10 +1311,12 @@
 
 <Modal title={`${selectedDayKey} の編集`} bind:open={dayModalOpen} size="lg">
   <div class="day-editor">
-    <div class="telework-editor">
-      <Checkbox checked={selectedTelework.papa} on:change={(e) => setTelework('papa', e.currentTarget.checked)}>パパテレワーク</Checkbox>
-      <Checkbox checked={selectedTelework.mama} on:change={(e) => setTelework('mama', e.currentTarget.checked)}>ママテレワーク</Checkbox>
-    </div>
+    {#if showWorldSchedules}
+      <div class="telework-editor">
+        <Checkbox checked={selectedTelework.papa} on:change={(e) => setTelework('papa', e.currentTarget.checked)}>パパテレワーク</Checkbox>
+        <Checkbox checked={selectedTelework.mama} on:change={(e) => setTelework('mama', e.currentTarget.checked)}>ママテレワーク</Checkbox>
+      </div>
+    {/if}
 
     <div class="editor-switch" role="tablist" aria-label="予定種別">
       <button class:active={dayEditorMode === 'schedule'} type="button" on:click={() => switchDayEditorMode('schedule')}>日予定</button>
