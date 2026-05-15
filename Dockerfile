@@ -11,7 +11,7 @@ RUN npm ci
 COPY frontend/ ./
 RUN npm run build
 
-FROM golang:1.26.2-bookworm AS backend-build
+FROM golang:1.26.3-bookworm AS backend-build
 WORKDIR /src/backend
 COPY backend/go.mod backend/go.sum ./
 RUN go mod download
@@ -35,6 +35,7 @@ ENV PORT=8080 \
 RUN apt-get update \
     && apt-get install -y --no-install-recommends ca-certificates python3 python3-venv fonts-morisawa-bizud-gothic fonts-noto-core fonts-noto-extra \
     && python3 -m venv /opt/venv \
+    && /opt/venv/bin/pip install --no-cache-dir --upgrade pip==26.1 \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
